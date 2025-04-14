@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>German Driver's License Validator</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        #canvasOutput, #debugCanvas {
+            margin-top: 20px;
+            max-width: 100%;
+            border: 1px solid #ccc;
+        }
+        #status, #results, #gptResults {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        #status {
+            background-color: #f0f0f0;
+        }
+        #results, #gptResults {
+            background-color: #e7f3fe;
+        }
+        .valid {
+            color: green;
+        }
+        .invalid {
+            color: red;
+        }
+        .button-container {
+            margin-top: 10px;
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            background-color: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        button:disabled {
+            background-color: #cccccc;
+        }
+        #apiKeyInput {
+            margin-top: 10px;
+            padding: 8px;
+            width: 300px;
+        }
+    </style>
+</head>
+<body>
+    <h2>German Driver's License Validator</h2>
+    <div>
+        <input type="file" id="fileInput" accept="image/*">
+    </div>
+    <div>
+        <input type="password" id="apiKeyInput" placeholder="Enter your OpenAI API Key" />
+    </div>
+    <div class="button-container">
+        <button onclick="validateLicense()">Validate with OpenCV</button>
+        <button onclick="validateWithGPT()" id="gptButton">Validate with ChatGPT</button>
+    </div>
+    <div>
+        <canvas id="canvasOutput"></canvas>
+        <canvas id="debugCanvas"></canvas>
+    </div>
+    <div id="status">OpenCV.js is loading...</div>
+    <div id="results"></div>
+    <div id="gptResults"></div>
+
+    <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
+    <script>
+        let imgElement = null;
+        let canvasOutput = null;
+        let debugCanvas = null;
+        let ctx = null;
+
+        function onOpenCvReady() {
+            document.getElementById('status').innerHTML = 'OpenCV.js is ready. Please upload an image.';
+            canvasOutput = document.getElementById('canvasOutput');
+            debugCanvas = document.getElementById('debugCanvas');
+            ctx = canvasOutput.getContext('2d');
+            
+            document.getElementById('fileInput').addEventListener('change', handleFileSelect);
+        }
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                imgElement = new Image();
+                imgElement.onload = function() {
+                    canvasOutput.width = imgElement.width;
+                    canvasOutput.height = imgElement.height;
+                    debugCanvas.width = imgElement.width;
+                    debugCanvas.height = imgElement.height;
+                    
+                    ctx.drawImage(imgElement, 0, 0);
+                };
+                imgElement.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        async function validateWithGPT() {
+            const apiKey = document.getElementById('apiKeyInput').value;
+            if (!apiKey) {
+                alert('Please enter your OpenAI API key');
+                return;
+            }
+
+            if (!canvasOutput || !imgElement) {
+                alert('Please upload an image first');
+                return;
+            }
+
+            const gptButton = document.getElementById('gptButton');
+            const gptResults = document.getElementById('gptResults');
+            
+            try {
+                gptButton.disabled = true;
+                gptResults.innerHTML = 'Analyzing with ChatGPT...';
+
+                // Convert canvas to base64
+                const imageData = canvasOutput.toDataURL('image/jpeg', 0.8);
+                const base64Image = imageData.split(',')[1];
+
+                const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`
+                    },
+                    body: JSON.stringify({
+                        model: "gpt-4.1-nano",
+                        messages: [
+                            {
+                                role: "user",
+                                content: [
+                                    {
+                                        type: "text",
+                                        text: "Please analyze this image and tell me if it's a valid German driver's license. Check for: 1) Presence of EU flag 2) 'FÜHRERSCHEIN' text 3) Clear photo and text 4) Proper layout and format. Provide a detailed analysis."
+                                    },
+                                    {
+                                        type: "image_url",
+                                        image_url: {
+                                            url: `data:image/jpeg;base64,${base64Image}`
+                                        }
+                                    }
+                                ]
+                            }
+                        ],
+                        max_tokens: 500
+                    })
+                });
+
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(data.error.message);
+                }
+
+                const analysis = data.choices[0].message.content;
+                gptResults.innerHTML = `
+                    <h3>ChatGPT Analysis:</h3>
+                    <p>${analysis.replace(/\n/g, '<br>')}</p>
+                `;
+            } catch (error) {
+                gptResults.innerHTML = `
+                    <h3>Error:</h3>
+                    <p class="invalid">${error.message}</p>
+                `;
+            } finally {
+                gptButton.disabled = false;
+            }
+        }
+
+        function validateLicense() {
+            // Read image
+            let src = cv.imread(canvasOutput);
+            let dst = new cv.Mat();
+            let results = [];
+
+            try {
+                // Convert to HSV for better color detection
+                cv.cvtColor(src, dst, cv.COLOR_RGBA2RGB);
+                cv.cvtColor(dst, dst, cv.COLOR_RGB2HSV);
+
+                // Define blue color range (for EU flag)
+                let lowBlue = new cv.Mat(dst.rows, dst.cols, dst.type(), [100, 50, 50, 0]);
+                let highBlue = new cv.Mat(dst.rows, dst.cols, dst.type(), [130, 255, 255, 255]);
+                
+                // Create mask for blue regions
+                let mask = new cv.Mat();
+                cv.inRange(dst, lowBlue, highBlue, mask);
+
+                // Find contours
+                let contours = new cv.MatVector();
+                let hierarchy = new cv.Mat();
+                cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+                // Check if we found the blue EU flag region
+                let hasEuFlag = false;
+                for (let i = 0; i < contours.size(); ++i) {
+                    let area = cv.contourArea(contours.get(i));
+                    if (area > 500 && area < 50000) {
+                        hasEuFlag = true;
+                        break;
+                    }
+                }
+
+                // Convert to grayscale for text detection
+                cv.cvtColor(src, dst, cv.COLOR_RGBA2GRAY);
+                
+                // Apply threshold to get binary image
+                cv.threshold(dst, dst, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+
+                // Check image quality
+                let meanVal = cv.mean(dst)[0];
+                let isImageClear = meanVal > 120 && meanVal < 240;
+
+                // Display results
+                let resultsDiv = document.getElementById('results');
+                resultsDiv.innerHTML = `
+                    <h3>OpenCV Validation Results:</h3>
+                    <p class="${hasEuFlag ? 'valid' : 'invalid'}">
+                        EU Flag Detection: ${hasEuFlag ? 'Found' : 'Not Found'}
+                    </p>
+                    <p class="${isImageClear ? 'valid' : 'invalid'}">
+                        Image Quality: ${isImageClear ? 'Clear' : 'Poor quality or unclear'}
+                    </p>
+                    <p class="${(hasEuFlag && isImageClear) ? 'valid' : 'invalid'}">
+                        Overall Assessment: ${(hasEuFlag && isImageClear) ? 
+                            'Likely a valid German Driver\'s License' : 
+                            'May not be a valid German Driver\'s License'}
+                    </p>
+                `;
+
+                // Display debug visualization
+                cv.imshow('debugCanvas', dst);
+
+            } catch (err) {
+                console.error(err);
+                document.getElementById('results').innerHTML = `
+                    <p class="invalid">Error processing image: ${err.message}</p>
+                `;
+            } finally {
+                // Clean up
+                src.delete();
+                dst.delete();
+            }
+        }
+    </script>
+</body>
+</html>
